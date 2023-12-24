@@ -3,6 +3,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 import reactor.test.StepVerifier;
+import reactor.util.concurrent.Queues;
 
 import java.time.Duration;
 import java.util.List;
@@ -34,10 +35,11 @@ public class c8_Sinks extends SinksBase {
     @Test
     public void single_shooter() {
         //todo: feel free to change code as you need
-        Mono<Boolean> operationCompleted = null;
+        Sinks.One<Boolean> operationCompletedSink = Sinks.one();
+        Mono<Boolean> operationCompleted = operationCompletedSink.asMono();
         submitOperation(() -> {
-
             doSomeWork(); //don't change this line
+            operationCompletedSink.tryEmitValue(true);
         });
 
         //don't change code below
@@ -55,10 +57,13 @@ public class c8_Sinks extends SinksBase {
     @Test
     public void single_subscriber() {
         //todo: feel free to change code as you need
-        Flux<Integer> measurements = null;
+        Sinks.Many<Integer> sinksMany = Sinks.many().unicast().onBackpressureBuffer();
+        Flux<Integer> measurements = sinksMany.asFlux();
         submitOperation(() -> {
 
             List<Integer> measures_readings = get_measures_readings(); //don't change this line
+            measures_readings.forEach(sinksMany::tryEmitNext);
+            sinksMany.tryEmitComplete();
         });
 
         //don't change code below
@@ -75,10 +80,13 @@ public class c8_Sinks extends SinksBase {
     @Test
     public void it_gets_crowded() {
         //todo: feel free to change code as you need
-        Flux<Integer> measurements = null;
+        Sinks.Many<Integer> sinksMany = Sinks.many().multicast().onBackpressureBuffer();
+        Flux<Integer> measurements = sinksMany.asFlux();
         submitOperation(() -> {
 
             List<Integer> measures_readings = get_measures_readings(); //don't change this line
+            measures_readings.forEach(sinksMany::tryEmitNext);
+            sinksMany.tryEmitComplete();
         });
 
         //don't change code below
@@ -98,7 +106,7 @@ public class c8_Sinks extends SinksBase {
     @Test
     public void open_24_7() {
         //todo: set autoCancel parameter to prevent sink from closing
-        Sinks.Many<Integer> sink = Sinks.many().multicast().onBackpressureBuffer();
+        Sinks.Many<Integer> sink = Sinks.many().multicast().onBackpressureBuffer(Queues.SMALL_BUFFER_SIZE, false);
         Flux<Integer> flux = sink.asFlux();
 
         //don't change code below
@@ -140,7 +148,7 @@ public class c8_Sinks extends SinksBase {
     @Test
     public void blue_jeans() {
         //todo: enable autoCancel parameter to prevent sink from closing
-        Sinks.Many<Integer> sink = Sinks.many().multicast().onBackpressureBuffer();
+        Sinks.Many<Integer> sink = Sinks.many().replay().all();
         Flux<Integer> flux = sink.asFlux();
 
         //don't change code below
@@ -187,7 +195,15 @@ public class c8_Sinks extends SinksBase {
 
         for (int i = 1; i <= 50; i++) {
             int finalI = i;
-            new Thread(() -> sink.tryEmitNext(finalI)).start();
+//            long deadline = System.currentTimeMillis() + Duration.ofSeconds(2).toMillis();
+            new Thread(() -> sink.emitNext(finalI,
+                    (signalType, emitResult) ->
+                            emitResult.equals(Sinks.EmitResult.FAIL_NON_SERIALIZED)
+                    // this causes an intermittent exception:
+                    // Exception in thread "Thread-30" reactor.core.publisher.Sinks$EmissionException:
+                    // Spec. Rule 1.3 - onSubscribe, onNext, onError and onComplete signaled to a Subscriber MUST be signaled serially.
+//                                    && (System.currentTimeMillis() >= deadline)
+            )).start();
         }
 
         //don't change code below
