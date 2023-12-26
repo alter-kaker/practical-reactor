@@ -1,6 +1,7 @@
 import org.junit.jupiter.api.*;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.SignalType;
 import reactor.test.StepVerifier;
 import reactor.util.context.Context;
 
@@ -32,7 +33,7 @@ public class c13_Context extends ContextBase {
      */
     public Mono<Message> messageHandler(String payload) {
         //todo: do your changes withing this method
-        return Mono.just(new Message("set correlation_id from context here", payload));
+        return Mono.deferContextual(ctx -> Mono.just(new Message(ctx.get(HTTP_CORRELATION_ID), payload)));
     }
 
     @Test
@@ -55,9 +56,8 @@ public class c13_Context extends ContextBase {
         Mono<Void> repeat = Mono.deferContextual(ctx -> {
             ctx.get(AtomicInteger.class).incrementAndGet();
             return openConnection();
-        });
-        //todo: change this line only
-        ;
+        })
+                .contextWrite(Context.of(AtomicInteger.class, new AtomicInteger(0)));
 
         StepVerifier.create(repeat.repeat(4))
                     .thenAwait(Duration.ofSeconds(10))
@@ -79,11 +79,27 @@ public class c13_Context extends ContextBase {
         AtomicInteger pageWithError = new AtomicInteger(); //todo: set this field when error occurs
 
         //todo: start from here
-        Flux<Integer> results = getPage(0)
+        final String PAGE = "page";
+        Flux<Integer> results = Mono.deferContextual(ctx -> getPage(
+                ((AtomicInteger)ctx.get(PAGE)).get())
+                )
+                .doOnEach(signal -> {
+                    AtomicInteger pageCounter = signal.getContextView().get(PAGE);
+
+                    if (signal.isOnNext()) {
+                        System.out.println("Processing Page " + pageCounter.getAndIncrement());
+                    } else if (signal.isOnError()) {
+                        int pageNo = pageCounter.getAndIncrement();
+                        pageWithError.set(pageNo);
+                        System.out.println("ERROR at page" + pageNo);
+                    }
+
+                })
+                .onErrorResume(e -> Mono.empty())
                 .flatMapMany(Page::getResult)
                 .repeat(10)
-                .doOnNext(i -> System.out.println("Received: " + i));
-
+                .doOnNext(i -> System.out.println("Received: " + i))
+                .contextWrite(Context.of(PAGE, new AtomicInteger(0)));
 
         //don't change this code
         StepVerifier.create(results)
